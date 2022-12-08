@@ -4,13 +4,17 @@ import cv2
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+from scipy.stats import uniform
 
 from sklearn import preprocessing
 from sklearn import linear_model
+from sklearn.linear_model import LogisticRegression, LogisticRegressionCV
+from sklearn.model_selection import RandomizedSearchCV, GridSearchCV
+from sklearn.svm import SVC
 from sklearn.utils import shuffle
 from sklearn.metrics import confusion_matrix
 
-GENERATE_DIGIT_IMAGE = True
+GENERATE_DIGIT_IMAGE = False
 
 df = pd.read_csv("./mnist.csv")
 
@@ -82,24 +86,45 @@ print(confusion_matrix(labels, predict_labels))
 # Create pixel occurance image of all digits (which pixels are unused and which are used)
 
 pixel_means = np.zeros(784)
+unused_pixels = np.zeros(784)
 useless_pixels = []
 
 for pixel_index in range(len(pixel_means)):
     pixel_mean = np.mean(digits.iloc[:, pixel_index])
 
     if pixel_mean == 0:
+        unused_pixels[pixel_index] = 255
         useless_pixels.append(pixel_index + 1)
 
     pixel_means[pixel_index] = pixel_mean
 
+plt.imshow(unused_pixels.reshape(28, 28))
+plt.show()
+
+print(f"useless pixels {useless_pixels}")
+print(len(useless_pixels))
+
 cv2.imwrite('average_mean_of_all_digits.png', pixel_means.reshape(28, 28))
+cv2.imwrite('unused_pixels.png', unused_pixels.reshape(28, 28))
 
 plt.imshow(pixel_means.reshape(28, 28))
 plt.show()
 
 # label distribution
 
-plt.hist(labels)
+label_count = [len(labels[labels == i]) for i in range(len(labels_unique))]
+fig, ax = plt.subplots()
+
+ax.bar(x=np.arange(0, 10), height=label_count, tick_label=np.arange(0, 10))
+
+for i, v in enumerate(label_count):
+    ax.text(i - 0.4, v + 50, str(v), color='black', fontweight='bold')
+
+ax.set_title('Distribution of digit labels')
+ax.set_ylabel('Count')
+ax.set_xlabel('Digit label')
+# ax.set_xticks(np.arange(0, 9), labels='')
+
 plt.show()
 
 # Task 2 / 3 Ink
@@ -114,8 +139,15 @@ print(ink)
 print(ink_mean)
 print(ink_std)
 
-plt.boxplot(digits_ink)
+fig = plt.figure()
+ax = fig.add_subplot()
+
+ax.boxplot(digits_ink, positions=np.arange(0, 10))
+ax.set_title('Boxplot of the ink feature for each digit')
+ax.set_xlabel('Digits')
+ax.set_ylabel('Means')
 plt.show()
+
 
 ink_scaled = preprocessing.scale(ink).reshape(-1, 1)
 
@@ -150,7 +182,13 @@ digits_perimeter = [perimeter[labels == i] for i in range(len(labels_unique))]
 print(perimeter_mean)
 print(perimeter_std)
 
-plt.boxplot(digits_perimeter)
+fig = plt.figure()
+ax = fig.add_subplot()
+
+ax.boxplot(digits_perimeter, positions=np.arange(0, 10))
+ax.set_title('Boxplot of the circumference feature for each digit')
+ax.set_xlabel('Digits')
+ax.set_ylabel('Means')
 plt.show()
 
 perimeter_scaled = preprocessing.scale(perimeter).reshape(-1, 1)
@@ -168,7 +206,7 @@ combine_ink_perimeter = pd.DataFrame(ink_scaled)
 combine_ink_perimeter[1] = pd.DataFrame(perimeter_scaled)
 combine_ink_perimeter.columns = ['ink', 'perimeter']
 
-regression_model = linear_model.LogisticRegressionCV()
+regression_model = linear_model.LogisticRegression()
 regression_model.fit(combine_ink_perimeter, labels)
 digit_prediction = regression_model.predict(combine_ink_perimeter)
 
@@ -177,20 +215,53 @@ print(confusion_matrix(labels, digit_prediction))
 
 
 # Task 5 multinomial logit model (LASSO)
+df = shuffle(df, random_state=5)
 
-df = df.drop(useless_pixels)
-df = shuffle(df)
+print(df.shape)
 
-train_df = df.iloc[:5000, :]
-test_df = df.iloc[5000:, :]
+train_df = df.values[:5000, :]
+test_df = df.values[5000:, :]
 
-train_X = train_df.iloc[:, 1:]
-train_Y = train_df.iloc[:, 0]
 
-test_X = test_df.iloc[:, 1:]
-test_Y = test_df.iloc[:, 0]
+print(train_df.shape)
+print(test_df.shape)
 
-train_X = preprocessing.scale(train_X)
-test_X = preprocessing.scale(test_X)
+train_X = train_df[:, 1:]
+train_Y = train_df[:, 0]
+#
+test_X = test_df[:, 1:]
+test_Y = test_df[:, 0]
+#
+train_X_scaled = preprocessing.scale(train_X)
+test_X_scaled = preprocessing.scale(test_X)
+#
+# print(test_X.shape)
+# print(test_Y.shape)
+
+svm_model = SVC(C=1, gamma=0.01, kernel='poly')
+svm_model.fit(train_X, train_Y)
+
+parameters = dict(kernel=['rbf', 'poly'], C=[-3, -2, -0.5, 0.5, 1], gamma=[1e-2, 1e-3, 1e-4, 1e-5])
+
+svm_cls = GridSearchCV(svm_model, scoring='neg_root_mean_squared_error', n_jobs=10, cv=10, param_grid=parameters)
+svm_cls.fit(train_X, train_Y)
+
+print(svm_cls.best_params_)
+print(svm_cls.score(test_X, test_Y))
+
+svm_pred = svm_model.predict(test_X)
+
+print(svm_model.score(test_X, test_Y))
+print(confusion_matrix(test_Y, svm_pred))
+
+SVM_scoring_table = pd.DataFrame(svm_cls.cv_results_).to_csv("svm_results.csv")
+
+model = LogisticRegressionCV(cv=10, solver='saga', penalty='l1', n_jobs=10, Cs=[1, 5, 10, 20, 25, 50], tol=0.001, max_iter=1000, random_state=5)
+model.fit(train_X_scaled, train_Y)
+
+lr_pred = model.predict(test_X_scaled)
+
+print(model.score(test_X_scaled, test_Y))
+print(confusion_matrix(test_Y, lr_pred))
 
 
